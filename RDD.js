@@ -12,80 +12,76 @@ var util = require('util'),
 
 /* @param config  config file path in local file system */
 function RDD (config) {
-	// parent data set
-	this.dataPartition = { 
-		url : "some file path", 
-		lines : { from : 10, to : 20 }
-	};
+	// parent data set, typically contains file path and partition
+	this.dataPartition = {};
 
 	// in-memory data, can be any type. most likely it's an array or string
-	this.data = '';   
+	this.data = [];   
 
 	// pending transformations, to write to a log
-	this.transformations = [
-		{
-		 type : 'map', 
-		 func : function (t) { return t.toUpperCase(); } 
-		},
-
-		{
-		 type : 'filter',
-		 func : function (t) { return t[0] === 'A'; }
-		}
-	}];
+	this.transformations = [];
 
 	// finished transformations
 	this.finishedTrans = [];
 }
 
-RDD.prototype.fromText = function(path) {
+RDD.prototype.load = function(path) {
 	this.dataPartition.url = path;
 }
 
 RDD.prototype.map = function(f) {
-	this.transformations.push({ type : 'map', func : f.toString() });
+	this.transformations.push({ type : 'map', func : this.restoreFunc(f) });
 }
 
 RDD.prototype.flatMap = function(f) {
-	this.transformations.push( {type : 'flatMap', func : f.toString() });
+	this.transformations.push( {type : 'flatMap', func : this.restoreFunc(f) });
 }
 
 RDD.prototype.filter = function(f) {
-	this.transformations.push({type : 'filter', func : f.toString()});
+	this.transformations.push({type : 'filter', func : this.restoreFunc(f) });
 }
 
 RDD.prototype.sort = function(f) {
-	this.transformations.push({type : 'sort', func : f.toString() });
+	this.transformations.push({type : 'sort', func : this.restoreFunc(f) });
 }
 
-RDD.prototype.count = function() {
-
+RDD.prototype.count = function(cb) {
+	this.applyTransformations(cb);
 }
 
-RDD.prototype.collect = function() {
-
+RDD.prototype.collect = function(cb) {
+	this.applyTransformations(cb);
 }
 
 /** private functions */
-RDD.prototype.applyTransformations = function() {
+RDD.prototype.restoreFunc = function(f) {
+	return eval('(' + f + ')');
+}
+
+
+RDD.prototype.applyTransformations = function(cb) {
+	var obj = this;
 	this.loadData(function() {
-		this.transformations.forEach(function(t) {
-			this.applyTransformation(t);
-			this.finishedTrans.push(t);
+		obj.transformations.forEach(function(t) {
+			obj.applyTransformation(t);
+			obj.finishedTrans.push(t);
 		});
 
-		this.transformations = [];
+		obj.transformations = [];
+		cb(obj);
 	});
 }
 
+
 RDD.prototype.loadData = function(cb) {
-	if(!futil.existy(this.data)) {
+	var obj = this;
+	if(this.data.length == 0) {
 		fs.readFile(this.dataPartition.url, function (err, data) {
         	if (err) {
             	throw err;
         	}
 
-        	this.data = data;
+        	obj.data.push(data.toString());
         	cb();
     	});
 	} else {
@@ -111,20 +107,22 @@ RDD.prototype.applyTransformation = function(t) {
 }
 
 RDD.prototype.applyMap = function(f) {
-
+	this.data = this.data.map(f);
 } 
 
 RDD.prototype.applyFilter = function(f) {
-
+	this.data = this.data.filter(f);
 }
 
 RDD.prototype.applyFlatMap = function(f) {
-
+	console.log(this.data);
+	this.data = futil.flatMap(this.data, f);
+	console.log(this.data);
 }
 
 RDD.prototype.applySort = function(f) {
 
 }
 
-
+exports.RDD = RDD;
 

@@ -84,6 +84,11 @@ function None() {
 util.inherits(None, Optional);
 
 
+/** some high-order functions missing in underscore.js */
+function flatMap(array, f) {
+	return _.flatten(array.map(f));
+}
+
 /** immutable utils for basic collections */
 function exceptLast(array) {
 	return array.slice(0, array.length - 1);
@@ -117,3 +122,6 @@ exports.loopBoost = loopBoost;
 exports.Optional = Optional;
 exports.Some = Some;
 exports.None = None;
+exports.flatMap = flatMap;
+exports.existy = existy;
+exports.truthy = truthy;
