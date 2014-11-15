@@ -1,128 +1,134 @@
 var util = require('util'),
 	_ = require('underscore')._,
-	http = require('http'),
 	futil = require('./functional_util.js'),
-	fs = require('fs');
-
-/**
-* Transformations : map, filter, sort
-* Actions : count, save, collect, reduce
-*/
+	fs = require('fs'),
+	zerorpc = require("zerorpc");
 
 
-/* @param config  config file path in local file system */
-function RDD (config) {
+/** immutable data structure */
+function RDD () {
 	// parent data set, typically contains file path and partition
-	this.dataPartition = {};
+	// each element must have a <ip> and a <port> field 
+	this.dataPartition = [];
 
-	// in-memory data, can be any type. most likely it's an array or string
-	this.data = [];   
+	// a set of dependencies (or parent RDDs)
+	this.dependency = [];
 
-	// pending transformations, to write to a log
-	this.transformations = [];
-
-	// finished transformations
-	this.finishedTrans = [];
+	// a function f, applying f on parent RDDs produces target RDD
+	this.transformation = {};
 }
 
-RDD.prototype.load = function(path) {
-	this.dataPartition.url = path;
+RDD.prototype.build = function(dataPartition, dependency, transformation) {
+	var target = new RDD();
+	target.dataPartition = dataPartition;
+	target.dependency = dependency;
+	target.transformation = transformation;
+
+	return target;
+}
+
+RDD.prototype.fromLocalText = function(localFile) {
+
+}
+
+/** note this operation will change the state of RDD */
+RDD.prototype.addDataPartition = function(partition) {
+	this.dataPartition.push(partition);
+	return this;
 }
 
 RDD.prototype.map = function(f) {
-	this.transformations.push({ type : 'map', func : this.restoreFunc(f) });
+	return this.build(this.dataPartition, 
+		[this],
+		{ type : 'map', func : f }
+		);
 }
 
 RDD.prototype.flatMap = function(f) {
-	this.transformations.push( {type : 'flatMap', func : this.restoreFunc(f) });
+	return this.build(this.dataPartition,
+		[this],
+		{ type : 'flatMap', func : f }
+		);
 }
 
 RDD.prototype.filter = function(f) {
-	this.transformations.push({type : 'filter', func : this.restoreFunc(f) });
+	return this.build(this.dataPartition,
+		[this],
+		{ type : 'filter', func : f }
+		);
 }
 
-RDD.prototype.sort = function(f) {
-	this.transformations.push({type : 'sort', func : this.restoreFunc(f) });
+RDD.prototype.reduce = function(f, initialValue) {
+	return this.build(this.dataPartition,
+		[this],
+		{ type : 'reduce', func : f, initialValue : initialValue }
+		);
 }
 
 RDD.prototype.count = function(cb) {
-	this.applyTransformations(cb);
-}
+	var trans = this.serializeTrans(this.getLinearTrans());
+	var cnt = 0;
+	var clients = [];
+	var todo = this.dataPartition.length;
+	var done = 0;
 
-RDD.prototype.collect = function(cb) {
-	this.applyTransformations(cb);
-}
+	this.dataPartition.forEach(function(p) {
+		var client = new zerorpc.Client();
+		clients.push(client);
+		client.connect("tcp://" + p.ip + ":" + p.port);
 
-/** private functions */
-RDD.prototype.restoreFunc = function(f) {
-	return eval('(' + f + ')');
-}
-
-
-RDD.prototype.applyTransformations = function(cb) {
-	var obj = this;
-	this.loadData(function() {
-		obj.transformations.forEach(function(t) {
-			obj.applyTransformation(t);
-			obj.finishedTrans.push(t);
+		client.invoke("count", trans, function(err, res, more) {
+			cnt += parseInt(res);
+			done += 1;
+			if(done === todo) { 
+				try {
+					clients.forEach(function(c) {
+						c.close();
+					});
+					cb(null, cnt);
+				} catch(err) {
+					cb(err, cnt);
+				}
+			}
 		});
-
-		obj.transformations = [];
-		cb(obj);
 	});
 }
 
+/** get all transformations so far */
+RDD.prototype.getLinearTrans = function() {
+	var trans = [];
+	var last = this;
 
-RDD.prototype.loadData = function(cb) {
-	var obj = this;
-	if(this.data.length == 0) {
-		fs.readFile(this.dataPartition.url, function (err, data) {
-        	if (err) {
-            	throw err;
-        	}
-
-        	obj.data.push(data.toString());
-        	cb();
-    	});
-	} else {
-		cb();
+	while(last.dependency.length !== 0) {
+		trans.push(last.transformation);
+		last = last.dependency[0];
 	}
+
+	return trans.reverse();
 }
 
-RDD.prototype.applyTransformation = function(t) {
-	switch(t.type) {
-		case 'map' :
-			this.applyMap(t.func);
-			break;
-		case 'filter' :
-			this.applyFilter(t.func);
-			break;
-		case 'flatMap' :
-			this.applyFlatMap(t.func);
-			break;
-		case 'sort' :
-			this.applySort(t.func);
-			break;
-	}
+RDD.prototype.serializeTrans = function(trans) {
+	return trans.map(function(t) {
+		var s = _.clone(t);
+		s.func = s.func.toString();
+		return s;
+	});
 }
 
-RDD.prototype.applyMap = function(f) {
-	this.data = this.data.map(f);
-} 
+// test. eventually these lines will be moved to RddDriver.js
+var rdd = new RDD();
 
-RDD.prototype.applyFilter = function(f) {
-	this.data = this.data.filter(f);
-}
-
-RDD.prototype.applyFlatMap = function(f) {
-	console.log(this.data);
-	this.data = futil.flatMap(this.data, f);
-	console.log(this.data);
-}
-
-RDD.prototype.applySort = function(f) {
-
-}
-
-exports.RDD = RDD;
-
+rdd
+.addDataPartition({ip : '127.0.0.1', port : 4242})
+.flatMap(function(s){ 
+      return s.trim().split(/\s+/); 
+    })
+.filter(function(s) {
+	return s[0] === 't' || s[0] === 'T';
+})
+.reduce(function(t1, t2) {
+	return t1 + ":99" + t2;
+})
+.count(function(err, cnt) {
+	console.log(cnt);
+});
