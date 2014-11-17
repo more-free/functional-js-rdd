@@ -2,7 +2,8 @@ var util = require('util'),
 	_ = require('underscore')._,
 	futil = require('./functional_util.js'),
 	fs = require('fs'),
-	zerorpc = require("zerorpc");
+	zerorpc = require("zerorpc"),
+	partitioner = require("./Partitioner.js");
 
 
 /** immutable data structure */
@@ -11,18 +12,30 @@ function RDD () {
 	// each element must have a <ip> and a <port> field 
 	this.dataPartition = [];
 
-	// a set of dependencies (or parent RDDs)
+	// a set of dependencies (or parent RDDs) for each element of dataPartition, 
+	// an example :
+	// [
+	//  { parent : parentRDD1, partition : [ p1, p2] }, 
+	//  { parent : parentRDD2, partition : [ p1 ] }
+	// ]
 	this.dependency = [];
 
-	// a function f, applying f on parent RDDs produces target RDD
+	// a single function f, applying f on parent RDDs produces target RDD
 	this.transformation = {};
+
+	// works for (key, value) pair-RDD only. by default it uses the partitioner
+	// of its parent RDD (Note although it is a wide-dependency, it still has only
+	// one parent RDD). If its parent RDD has no partitioner set, it uses hash
+	// partitioner by default
+	this.partitioner = null;
 }
 
-RDD.prototype.build = function(dataPartition, dependency, transformation) {
+RDD.prototype.build = function(dataPartition, dependency, transformation, partitioner) {
 	var target = new RDD();
 	target.dataPartition = dataPartition;
 	target.dependency = dependency;
 	target.transformation = transformation;
+	target.partitioner = partitioner;
 
 	return target;
 }
@@ -37,33 +50,126 @@ RDD.prototype.addDataPartition = function(partition) {
 	return this;
 }
 
+/** 
+*	one-to-one transformations, narrow dependency
+*/
 RDD.prototype.map = function(f) {
-	return this.build(this.dataPartition, 
-		[this],
+	var parent = this;
+
+	return this.build(
+		this.dataPartition, 
+		this.dataPartition.map(function(p) {
+			return { parent : parent, partition : [p] }
+		}),
 		{ type : 'map', func : f }
 		);
 }
 
 RDD.prototype.flatMap = function(f) {
-	return this.build(this.dataPartition,
-		[this],
+	var parent = this;
+
+	return this.build(
+		this.dataPartition,
+		this.dataPartition.map(function(p) {
+			return { parent : parent, partition : [p] }
+		}),
 		{ type : 'flatMap', func : f }
 		);
 }
 
 RDD.prototype.filter = function(f) {
-	return this.build(this.dataPartition,
-		[this],
+	var parent = this;
+
+	return this.build(
+		this.dataPartition,
+		this.dataPartition.map(function(p) {
+			return { parent : parent, partition : [p] }
+		}),
 		{ type : 'filter', func : f }
 		);
 }
 
+/**
+*	one-to-one transformations, wide dependencies, 
+*   some of them are for key-value RDD only
+*/
+
+// RDD[(K, V)] => RDD[(K, Array[V])]
+RDD.prototype.groupByKey = function(partitioner) {
+	var parent = this;
+
+	return this.build(
+		this.dataPartition,
+		this.dataPartition.map(function(p) {
+			return { parent : parent, partition : parent.dataPartition }
+		}),
+		{ type : 'groupByKey' },
+		this.getPartitioner(partitioner);
+		);
+}
+
+// RDD[(K, V)] => RDD[(K, V)]
+RDD.prototype.reduceByKey = function(f, partitioner) {
+
+}
+
+RDD.prototype.distinct = function(partitioner) {
+
+}
+
+RDD.prototype.sort = function(f, partitioner) {
+
+}
+
+
+RDD.prototype.getPartitioner = function(userSpecifiedPartitioner) {
+	if(futil.existy(userSpecifiedPartitioner))
+		return userSpecifiedPartitioner;
+	else if(futil.existy(this.partitioner)) 
+		return this.partitioner;
+	else
+		return partitioner.simpleHashPartition;
+}
+
+
+/**
+*	multiple-to-one transformations
+*/
+RDD.prototype.union = function(otherRdd) {
+	return this.build(
+		this.dataPartition.concat(otherRdd.dataPartition),
+		this.dependency.concat(otherRdd.dependency),
+		{ type : 'union' }
+		);
+}
+
+RDD.prototype.intersect = function(otherRdd) {
+
+}
+
+RDD.prototype.subtract = function(otherRdd) {
+
+}
+
+// for key-value pair RDD only
+RDD.prototype.crossProduct = function(otherRdd, partitioner) {
+
+}
+
+
+/** 
+* actions. 
+* TODO : decoupled with the underlying zeroRPC; move to scheduler; add failover
+*/
+
+// TODO  modify reduce as an action instead of a transformation
 RDD.prototype.reduce = function(f, initialValue) {
 	return this.build(this.dataPartition,
 		[this],
 		{ type : 'reduce', func : f, initialValue : initialValue }
 		);
 }
+
 
 RDD.prototype.count = function(cb) {
 	var trans = this.serializeTrans(this.getLinearTrans());
@@ -94,14 +200,30 @@ RDD.prototype.count = function(cb) {
 	});
 }
 
-/** get all transformations so far */
+RDD.prototype.collect = function(cb) {
+
+}
+
+RDD.prototype.persist = function(cb) {
+
+}
+
+RDD.prototype.save = function(saveObj, cb) {
+
+}
+
+/** 
+* private functions 
+*/
+
+// get all one-to-one narrow transformations so far 
 RDD.prototype.getLinearTrans = function() {
 	var trans = [];
 	var last = this;
 
 	while(last.dependency.length !== 0) {
 		trans.push(last.transformation);
-		last = last.dependency[0];
+		last = last.dependency[0].parent;
 	}
 
 	return trans.reverse();
