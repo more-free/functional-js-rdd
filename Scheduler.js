@@ -1,73 +1,88 @@
 /**
-*  build stages for an action of a given RDD, run each stage until success. 
+*  Build stages for an action of a given RDD, run each stage until success. 
 *  a typical stage has a boundary of a shuffle operation between data partitions.
+*  Stages are represented by implicit DAG. 
 */
 
 var RDD = require("./RDD.js").RDD;
 var futil = require("./functional_util.js");
+var _ = require("underscore")._;
 
 function Scheduler {
 
 } 
 
-/** TODO naive DAG implementation, not efficient */
-Scheduler.prototype.mkDAG = function(RDD, action) {
-	var dag = new DAG();
-	var queue = [RDD];
+/**
+* @param RDD final RDD (before applying the action)
+* @return an array of target RDDs for each stage. Each target RDD represents a DAG implicitly.
+*/
+Scheduler.prototype.buildStages = function(RDD) {
+	var parentRDDs = RDD.dependency.map(function(den) { return den.parent; } );
 
-	while(queue.length > 0) {
-		var cur = queue.shift();
-		cur.dependency.forEach(function(den) {
-			dag.addNode(den.parent);
-			dag.addEdge(den.parent, cur, cur.transformation.type);
+	if(parentRDDs.length === 0) {
+		return [RDD];
+	} else if(this.isShuffle(RDD)) {  // TODO multiple shuffle
+		return this.buildStages(parentRDDs[0]).concat([RDD]);
+	} else if(parentRDDs.length > 1) { // multiple transformation
+		if(RDD.transformation.type === 'union') {
+			var leftParentStages = this.buildStages(parentRDDs[0]);
+			var rightParentStages = this.buildStages(parentRDDs[1]);
 
-			if(queue.indexOf(den.parent) < 0)
-				queue.push(den.parent);
-		});
+			return futil.exceptLast(leftParentStages)
+					.concat(futil.exceptLast(rightParentStages))
+					.concat([RDD]);
+		} 
+		// TODO else handle other multiple transformations
+	} else {  // one-to-one transformation
+		var parentStages = this.buildStages(parentRDDs[0]);
+		return futil.setLast(parentStages, RDD);
 	}
-
-	return dag;
 }
 
-Scheduler.prototype.buildStages = function(dag) {
+// TODO support more shuffle operations
+Scheduler.prototype.isShuffle = function(RDD) {
+	return ['groupByKey'].indexOf(RDD.transformation.type) >= 0;
+}
+
+/**
+* @param RDD target RDD. it might be the target RDD for any stage 
+*/
+Scheduler.prototype.runStage = function(RDD) {
+	if(this.isShuffle(RDD)) {
+		this.runShuffle(RDD);
+	} else {
+		// run trasformations for each partition of the target RDD
+		var trans = this.getTransformation(RDD);
+		for(var i = 0; i < trans.length; i++) 
+			this.runTransformations(trans[i], RDD.dataPartition[i]);
+	}
+}
+
+Scheduler.prototype.runShuffle = function(RDD) {
+	// TODO
+	switch(RDD.transformation.type) {
+		case 'groupByKey' :
+			this.runGroupByKey(RDD);
+			break; 
+	}
+}
+
+Scheduler.prototype.runGroupByKey = function(RDD) {
 	
 }
 
-function DAG() {
-	// reference to RDDs
-	this.nodes = [];  
-	// { from : <idx in nodes>, to : <idx in nodes>, edge : <name of transformations> }
-	this.edges = [];  
+// { 
+//	source : some source RDD dataPartition element, 
+//	trans : [a list of transformations, ex. {type : 'map', func : xxx}, {type : 'filter', func : xxx}]
+//  }
+Scheduler.prototype.getTransformation = function(RDD) {
+	// TODO
 }
 
-DAG.prototype.addNode = function(n) {
-	var idx = this.nodes.indexOf(n);
-	if(idx >= 0) 
-		return idx;
-	else {
-		this.nodes.push(n);
-		return this.nodes.length - 1;
-	}
+Scheduler.prototype.runTransformations = function(trans, dependency) {
+	// TODO
 }
 
-DAG.prototype.addEdge = function(from, to, edge) {
-	var fromIdx = this.addNode(from);
-	var toIdx = this.addNode(to);
-
-	var idx = this.findEdge(fromIdx, toIdx, edge);
-	if(idx >= 0) 
-		return idx;
-	else {
-		this.edges.push({ from : fromIdx, to : toIdx, edge : edge });
-		return edges.length - 1;
-	}
-}
-
-DAG.prototype.findEdge = function(fromIdx, toIdx, edge) {
-	for(var i = 0; i < this.edges.length; i++) {
-		var cur = this.edges[i];
-		if(cur.from === fromIdx && cur.to === toIdx && cur.edge == edge) 
-			return i;
-	}
-	return -1;
+Scheduler.prototype.runAction = function(RDD, action) {
+	// TODO
 }
