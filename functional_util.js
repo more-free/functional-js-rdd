@@ -125,3 +125,4 @@ exports.None = None;
 exports.flatMap = flatMap;
 exports.existy = existy;
 exports.truthy = truthy;
+exports.setLast = setLast;

@@ -3,20 +3,22 @@ var util = require('util'),
 	futil = require('./functional_util.js'),
 	fs = require('fs'),
 	zerorpc = require("zerorpc"),
-	partitioner = require("./Partitioner.js");
+	partitioner = require("./Partitioner.js"),
+	scheduler = new (require("./Scheduler.js").Scheduler)(),
+	RPCClient = require("./client.js").RPCClient;
 
 
 /** immutable data structure */
-function RDD () {
+function RDD (workerNodes) {
 	// parent data set, typically contains file path and partition
-	// each element must have a <ip> and a <port> field 
-	this.dataPartition = [];
+	// each element typically has a <ip>, a <port>, a <isInMem> field 
+	this.dataPartition = workerNodes;
 
 	// a set of dependencies (or parent RDDs) for each element of dataPartition, 
 	// an example :
 	// [
-	//  { parent : parentRDD1, partition : [ p1, p2] }, 
-	//  { parent : parentRDD2, partition : [ p1 ] }
+	//  { parent : parentRDD1, partition : [ index1, index2] }, 
+	//  { parent : parentRDD2, partition : [ index1 ] }
 	// ]
 	this.dependency = [];
 
@@ -40,53 +42,61 @@ RDD.prototype.build = function(dataPartition, dependency, transformation, partit
 	return target;
 }
 
-RDD.prototype.fromLocalText = function(localFile) {
+// local file for test only
+RDD.prototype.fromLocalFile = function(localFile) {
+	var from = 1;
+	var each = 10;
 
-}
+	this.dataPartition = this.dataPartition.map(function(p) {
+		var np = { 
+				   ip : p.ip, 
+				   port : p.port, 
+				   type : 'local', 
+				   path : localFile, 
+				   from : from, 
+				   to : from + each 
+				};
+		from += each;
+		return np;
+	});
 
-/** note this operation will change the state of RDD */
-RDD.prototype.addDataPartition = function(partition) {
-	this.dataPartition.push(partition);
 	return this;
 }
+
+RDD.prototype.fromHDFS = function(hdfsPath) {
+	// TODO
+}
+
 
 /** 
 *	one-to-one transformations, narrow dependency
 */
 RDD.prototype.map = function(f) {
-	var parent = this;
-
-	return this.build(
-		this.dataPartition, 
-		this.dataPartition.map(function(p) {
-			return { parent : parent, partition : [p] }
-		}),
-		{ type : 'map', func : f }
-		);
+	return this.identity('map', f);
 }
 
 RDD.prototype.flatMap = function(f) {
-	var parent = this;
-
-	return this.build(
-		this.dataPartition,
-		this.dataPartition.map(function(p) {
-			return { parent : parent, partition : [p] }
-		}),
-		{ type : 'flatMap', func : f }
-		);
+	return this.identity('flatMap', f);
 }
 
 RDD.prototype.filter = function(f) {
+	return this.identity('filter', f);
+}
+
+RDD.prototype.identity = function(typeName, f) {
 	var parent = this;
 
-	return this.build(
-		this.dataPartition,
-		this.dataPartition.map(function(p) {
-			return { parent : parent, partition : [p] }
-		}),
-		{ type : 'filter', func : f }
-		);
+	var dataPartition = this.dataPartition.map(function(p) {
+		return { ip : p.ip, port : p.port, isInMem : false };
+	});
+
+	var dependency = _.range(this.dataPartition.length).map(function(d) {
+		return { parent : parent, partition : [d] };
+	});
+
+	var transformation = { type : typeName, func : f };
+
+	return this.build(dataPartition, dependency, transformation);
 }
 
 /**
@@ -104,7 +114,7 @@ RDD.prototype.groupByKey = function(partitioner) {
 			return { parent : parent, partition : parent.dataPartition }
 		}),
 		{ type : 'groupByKey' },
-		this.getPartitioner(partitioner);
+		this.getPartitioner(partitioner)
 		);
 }
 
@@ -172,36 +182,23 @@ RDD.prototype.reduce = function(f, initialValue) {
 
 
 RDD.prototype.count = function(cb) {
-	var trans = this.serializeTrans(this.getLinearTrans());
-	var cnt = 0;
-	var clients = [];
-	var todo = this.dataPartition.length;
-	var done = 0;
+	var rdd = this;
+	scheduler.runStagesSync(rdd, function(err, res) {
+		if(err)
+			throw new Error("stage error in <count>");
 
-	this.dataPartition.forEach(function(p) {
-		var client = new zerorpc.Client();
-		clients.push(client);
-		client.connect("tcp://" + p.ip + ":" + p.port);
-
-		client.invoke("count", trans, function(err, res, more) {
-			cnt += parseInt(res);
-			done += 1;
-			if(done === todo) { 
-				try {
-					clients.forEach(function(c) {
-						c.close();
-					});
-					cb(null, cnt);
-				} catch(err) {
-					cb(err, cnt);
-				}
-			}
-		});
+		scheduler.runCount(rdd, cb);
 	});
 }
 
 RDD.prototype.collect = function(cb) {
+	var rdd = this;
+	scheduler.runStagesSync(rdd, function(err, res) {
+		if(err)
+			throw new Error('stage error in <collect>');
 
+		scheduler.runCollect(rdd, cb);
+	});
 }
 
 RDD.prototype.persist = function(cb) {
@@ -238,19 +235,31 @@ RDD.prototype.serializeTrans = function(trans) {
 }
 
 // test. eventually these lines will be moved to RddDriver.js
-var rdd = new RDD();
+scheduler.setRemoteCmdStrategy(new RPCClient());
 
-rdd
-.addDataPartition({ip : '127.0.0.1', port : 4242})
+var rdd = new RDD([{ip : '127.0.0.1', port : 4242}])
+.fromLocalFile("./somefile")
 .flatMap(function(s){ 
       return s.trim().split(/\s+/); 
     })
 .filter(function(s) {
-	return s[0] === 't' || s[0] === 'T';
+	return s[0] === 'l';
 })
+.map(function(s) {
+	return s.toUpperCase();
+})
+
+/*
 .reduce(function(t1, t2) {
 	return t1 + ":99" + t2;
-})
-.count(function(err, cnt) {
-	console.log(cnt);
 });
+*/
+
+console.log(rdd.dataPartition);
+console.log(rdd.dependency);
+console.log(rdd.transformation);
+
+var stages = scheduler.buildStages(rdd);
+console.log(stages);
+
+rdd.count(function(err, cnt) {console.log(cnt); });

@@ -8,10 +8,20 @@ var server = new zerorpc.Server({
         reply(null, "Hello, " + name);
     },
 
+    // transformations
+    linearTransform : function(trans, reply) {
+    	rddWorker.linearTransform(trans, function(success) {
+    		reply(null, success);
+    	});
+    },
+
     // actions, support only linear stage now
-    count : function(trans, reply) {
-    	var cnt = rddWorker.count(trans);
-    	reply(null, cnt);
+    count : function(partition, reply) {
+    	reply(null, rddWorker.count(partition));
+    },
+
+    collect : function(partition, reply) {
+    	reply(null, rddWorker.collect(partition));
     }
 });
 
