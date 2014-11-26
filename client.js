@@ -1,5 +1,6 @@
 var zerorpc = require("zerorpc");
 var util = require("util");
+var _ = require("underscore")._;
 
 
 function RemoteCmdStrategy() {
@@ -41,12 +42,8 @@ RPCClient.prototype.linearTransform = function(trans, cb) {
 	var url = "tcp://" + trans.source.ip + ":" + trans.source.port;
  
 	client.connect(url); 
-	client.invoke("linearTransform", trans, function(err, res, more) { 
-		if(err) 
-			cb(err, res);
-		else
-			cb(null, res);
-
+	client.invoke("linearTransform", trans, function(err, keyInMem, more) { 
+		cb(err, keyInMem); // err is null if succeeded
 		client.close(); // it's ok for async close event
 	})
 }
@@ -80,7 +77,33 @@ RPCClient.prototype.count = function(RDD, cb) {
 }
 
 RPCClient.prototype.collect = function(RDD, cb) {
+	var coll = [];
+	var clients = [];
+	var todo = RDD.dataPartition.length;
+	var done = 0;
 
+	RDD.dataPartition.forEach(function(p) {
+		var client = new zerorpc.Client();
+		clients.push(client);
+		client.connect("tcp://" + p.ip + ":" + p.port);
+
+		client.invoke("collect", p, function(err, res, more) {
+			coll.push(res);
+			done += 1;
+			if(done === todo) { 
+				var flattenColl = _.flatten(coll);
+
+				try {
+					clients.forEach(function(c) {
+						c.close();
+					});
+					cb(null, flattenColl);
+				} catch(err) {
+					cb(err, flattenColl);
+				}
+			}
+		});
+	});
 }
 
 exports.RemoteCmdStrategy = RemoteCmdStrategy;

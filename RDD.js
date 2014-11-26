@@ -246,8 +246,8 @@ var rdd = new RDD([{ip : '127.0.0.1', port : 4242}])
 	return s[0] === 'l';
 })
 .map(function(s) {
-	return s.toUpperCase();
-})
+	return s.toUpperCase() + ' U !';
+});
 
 /*
 .reduce(function(t1, t2) {
@@ -263,3 +263,5 @@ var stages = scheduler.buildStages(rdd);
 console.log(stages);
 
 rdd.count(function(err, cnt) {console.log(cnt); });
+rdd.collect(function(err, res) { console.log(res); });
+

@@ -10,8 +10,8 @@ var server = new zerorpc.Server({
 
     // transformations
     linearTransform : function(trans, reply) {
-    	rddWorker.linearTransform(trans, function(success) {
-    		reply(null, success);
+    	rddWorker.linearTransform(trans, function(err, keyInMem) {
+    		reply(err, keyInMem);
     	});
     },
 

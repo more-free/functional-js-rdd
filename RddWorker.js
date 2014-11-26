@@ -3,20 +3,31 @@ var futil = require('./functional_util.js');
 var lazy = require('lazy');
 
 /**
-*  a worker holds on an immutable part of data, unless persist() is called.
+*  a worker holds an immutable part of data, unless persist() is called.
 */
 function RddWorker() {
 	this.data = [];
 }
 
-RddWorker.prototype.linearTransform = function(trans, clientCallBack) {
+/**
+* load data into memory (if necessary); apply a series of linear transformations 
+* to data, ex. map, filter, flatMap, etc. 
+* @param trans { source : xxx, trans : [{xxx}, {xxx}] }
+* @param callback(err, keyInMem)
+*/
+RddWorker.prototype.linearTransform = function(trans, callback) {
 	var obj = this;
-	var cb = function(success) {
-		obj.data = obj.applyLinearTrans(trans.trans);
-		clientCallBack(success);
+	var cb = function(err, keyInMem) {
+		try {
+			var res = obj.applyLinearTrans(trans.trans);
+			obj.data = res.data;
+			callback(null, res.key);
+		} catch(err) {
+			callback(err, null);
+		}
 	};
 
-	if(!trans.source.isInMem) {
+	if(!trans.source.isInMem) { // TODO do not use this ! this is from client 
 		switch(trans.source.type) {
 			case 'hdfs':
 				this.loadHDFS(trans.source, cb);
@@ -105,11 +116,13 @@ RddWorker.prototype.reduce = function(data, f, initialValue) {
 * actions. requested data should have already been loaded in memory.
 */
 RddWorker.prototype.count = function(partition) {
+	console.log(partition);
 	return this.data.length;
 }
 
 RddWorker.prototype.collect = function(partition) {
-
+	console.log(partition);
+	return this.data;
 }
 
 exports.RddWorker = RddWorker;

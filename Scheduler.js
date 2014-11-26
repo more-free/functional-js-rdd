@@ -21,6 +21,9 @@ Scheduler.prototype.setRemoteCmdStrategy = function(remoteCmdStrategy) {
 }
 
 
+/**
+* @param callback(err, res).  <res> contains a list of RDDs that run successfully.
+*/
 Scheduler.prototype.runStagesSync = function(RDD, callback) {
 	var targetRDDS = this.buildStages(RDD);
 	var obj = this;
@@ -67,25 +70,29 @@ Scheduler.prototype.isShuffle = function(RDD) {
 }
 
 /**
-* @param RDD target RDD. it might be the target RDD for any stage 
+* @param RDD target RDD. it might be the target RDD from any stage 
 */
 Scheduler.prototype.runStage = function(RDD, cb) {
 	if(this.isShuffle(RDD)) {
 		this.runShuffle(RDD, cb);
 	} else {
-		// run trasformations for each partition of the target RDD
+		// get trasformations for each partition of the target RDD
 		var trans = this.getLinearTransformationForEachPartition(RDD);
 		var obj = this;
 		var todo = trans.length;
 		var done = 0;
 
 		_.range(trans.length).forEach(function(i) {
-			obj.runLinearTransformations(trans[i], function(err, res) {
+			obj.runLinearTransformations(trans[i], function(err, keyInMem) {
 				if(err) 
 					throw new Error('stage error');
+				
 				done ++; 
+				RDD.dataPartition[i].isInMem = true;
+				RDD.dataPartition[i].key = keyInMem; // string
+
 				if(done === todo) 
-					cb(null, null);
+					cb(null, RDD); // trigger next stage to run
 			});
 		});
 	}
