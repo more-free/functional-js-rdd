@@ -2,7 +2,8 @@
 * @author morefree
 */
 var _ = require('underscore')._,
-	util = require('util');
+	util = require('util'),
+	stream = require('stream');
 
 
 function existy(x) {
@@ -116,6 +117,36 @@ function clone(array) {
 	return array.slice(0);
 }
 
+/** 
+* some other utils that might be moved to separate modules eventually 
+* http://strongloop.com/strongblog/practical-examples-of-the-new-node-js-streams-api/
+*/
+function Liner() {
+	var liner = new stream.Transform( { objectMode: true } );
+
+	liner._transform = function (chunk, encoding, done) {
+     	var data = chunk.toString()
+     	if (this._lastLineData) data = this._lastLineData + data
+ 
+     	var lines = data.split('\n')
+     	this._lastLineData = lines.splice(lines.length - 1, 1)[0]
+ 
+     	lines.forEach(this.push.bind(this))
+     	done()
+	}
+ 
+	liner._flush = function (done) {
+     	if (this._lastLineData) this.push(this._lastLineData)
+     	this._lastLineData = null
+     	done()
+	}
+
+	return liner;
+}
+ 
+
+
+
 /** exports */
 exports.retry = retry;
 exports.loopBoost = loopBoost;
@@ -126,3 +157,4 @@ exports.flatMap = flatMap;
 exports.existy = existy;
 exports.truthy = truthy;
 exports.setLast = setLast;
+exports.Liner = Liner;

@@ -42,8 +42,8 @@ RPCClient.prototype.linearTransform = function(trans, cb) {
 	var url = "tcp://" + trans.source.ip + ":" + trans.source.port;
  
 	client.connect(url); 
-	client.invoke("linearTransform", trans, function(err, keyInMem, more) { 
-		cb(err, keyInMem); // err is null if succeeded
+	client.invoke("linearTransform", trans, function(err, keyList, more) { 
+		cb(err, keyList); // err is null if succeeded
 		client.close(); // it's ok for async close event
 	})
 }

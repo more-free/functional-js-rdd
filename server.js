@@ -1,6 +1,6 @@
 var zerorpc = require("zerorpc");
 var RddWorker = require('./RddWorker.js').RddWorker;
-var rddWorker = new RddWorker('./somefile');
+var rddWorker = new RddWorker();
 
 var server = new zerorpc.Server({
 	// heartbeat
@@ -10,8 +10,8 @@ var server = new zerorpc.Server({
 
     // transformations
     linearTransform : function(trans, reply) {
-    	rddWorker.linearTransform(trans, function(err, keyInMem) {
-    		reply(err, keyInMem);
+    	rddWorker.linearTransform(trans, function(err, keyList) {
+    		reply(err, keyList);
     	});
     },
 

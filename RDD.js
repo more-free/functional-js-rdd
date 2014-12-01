@@ -11,7 +11,9 @@ var util = require('util'),
 /** immutable data structure */
 function RDD (workerNodes) {
 	// parent data set, typically contains file path and partition
-	// each element typically has a <ip>, a <port>, a <isInMem> field 
+	// each element typically has a <ip>, a <port>, a <key> field, and an optional <transKey>
+	// a <key> field is used to retrieve the partition from RddWorker
+	// a partition is not loaded into memory of RddWorker, if <key> == null
 	this.dataPartition = workerNodes;
 
 	// a set of dependencies (or parent RDDs) for each element of dataPartition, 
@@ -53,8 +55,10 @@ RDD.prototype.fromLocalFile = function(localFile) {
 				   port : p.port, 
 				   type : 'local', 
 				   path : localFile, 
+				   splitBy : 'line',
 				   from : from, 
-				   to : from + each 
+				   to : from + each ,
+				   encoding : 'utf8'
 				};
 		from += each;
 		return np;
@@ -87,7 +91,7 @@ RDD.prototype.identity = function(typeName, f) {
 	var parent = this;
 
 	var dataPartition = this.dataPartition.map(function(p) {
-		return { ip : p.ip, port : p.port, isInMem : false };
+		return { ip : p.ip, port : p.port };
 	});
 
 	var dependency = _.range(this.dataPartition.length).map(function(d) {
@@ -243,7 +247,7 @@ var rdd = new RDD([{ip : '127.0.0.1', port : 4242}])
       return s.trim().split(/\s+/); 
     })
 .filter(function(s) {
-	return s[0] === 'l';
+	return s[0] === 'l' || s[0] === 't';
 })
 .map(function(s) {
 	return s.toUpperCase() + ' U !';

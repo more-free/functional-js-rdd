@@ -83,13 +83,15 @@ Scheduler.prototype.runStage = function(RDD, cb) {
 		var done = 0;
 
 		_.range(trans.length).forEach(function(i) {
-			obj.runLinearTransformations(trans[i], function(err, keyInMem) {
+			obj.runLinearTransformations(trans[i], function(err, keyList) {
 				if(err) 
 					throw new Error('stage error');
 				
 				done ++; 
-				RDD.dataPartition[i].isInMem = true;
-				RDD.dataPartition[i].key = keyInMem; // string
+				// store the original key. the transformed key (keyList[1]) 
+				// will be swapped out from memory of RddWorker
+				RDD.dataPartition[i].key = keyList[0]; 
+				RDD.dataPartition[i].transKey = keyList[1];
 
 				if(done === todo) 
 					cb(null, RDD); // trigger next stage to run

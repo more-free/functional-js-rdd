@@ -1,80 +1,112 @@
 var fs = require('fs');
 var futil = require('./functional_util.js');
-var lazy = require('lazy');
+var MemManager = require('./MemManager');
 
 /**
 *  a worker holds an immutable part of data, unless persist() is called.
 */
-function RddWorker() {
-	this.data = [];
+function RddWorker(maxMemInBytes) {
+	this.memManager = new MemManager(maxMemInBytes);
 }
 
 /**
 * load data into memory (if necessary); apply a series of linear transformations 
 * to data, ex. map, filter, flatMap, etc. 
 * @param trans { source : xxx, trans : [{xxx}, {xxx}] }
-* @param callback(err, keyInMem)
+* @param callback(err, [originKey, transformedKey])
 */
 RddWorker.prototype.linearTransform = function(trans, callback) {
 	var obj = this;
 	var cb = function(err, keyInMem) {
+		if(err) {
+			callback(err, null);
+			return;
+		}
+
 		try {
-			var res = obj.applyLinearTrans(trans.trans);
-			obj.data = res.data;
-			callback(null, res.key);
+			// get new key in memory after applying all linear transformations to the partition.
+			// the old partition may still in memory
+			var newKey = obj.applyLinearTrans(keyInMem, trans);
+			callback(null, [keyInMem, newKey]); 
 		} catch(err) {
 			callback(err, null);
 		}
 	};
 
-	if(!trans.source.isInMem) { // TODO do not use this ! this is from client 
+	if(!trans.source.key || !this.memManager.exists(trans.source.key)) { 
 		switch(trans.source.type) {
 			case 'hdfs':
-				this.loadHDFS(trans.source, cb);
+				this.loadFromHDFS(trans.source, cb);
 				break;
 			default :
-				this.loadLocalFile(trans.source, cb);
+				this.loadFromLocalFile(trans.source, cb);
 		}
 	} else {
-		this.data = this.retrieveObject(trans.source.key);
-		cb(true);
+		var value = this.memManager.get(trans.source.key);
+		cb(null, trans.source.key);
 	}
 }
 
-RddWorker.prototype.retrieveObject = function(key) {
+
+/**
+* @param cb(err, key)
+*/
+RddWorker.prototype.loadFromLocalFile = function(dataPartition, cb) {
+	this.memManager.loadFromLocalFile(
+		 {
+		 path : dataPartition.path, 
+		 splitBy : dataPartition.splitBy, 
+		 start : dataPartition.from, 
+		 end : dataPartition.to, 
+		 encoding : dataPartition.encoding
+		 },
+
+		 function(err, key, value) {
+		 	cb(err, key);
+		 }
+		);
+}
+
+RddWorker.prototype.loadFromHDFS = function(dataPartition, cb) {
 	// TODO
 }
 
-RddWorker.prototype.loadLocalFile = function(dataPartition, cb) {
-	var lineCnt = 0;
+
+/**
+* optimize transformation sequence;
+* apply transformations;
+* remove intermediate RDD partitions to release memory space (maybe implicitly);
+* load new value, new key into memManager;
+* finally return the new key (for the new partition result, which is computed
+* by applying transformations sequentially to the original partition)
+*
+* @param trans
+* @param key key in memManager for the original partition
+*/
+RddWorker.prototype.applyLinearTrans = function(key, trans) {
 	var obj = this;
-
-	// TODO not efficient, because it will read all lines. need to find way to end early
-	// TODO do not use lazy, it is not active.
-	new lazy(fs.createReadStream(dataPartition.path))
-			.on('end', function() { 
- 						cb(true);
- 					})
-     		.lines
-     		.forEach(function(line) {
-         				lineCnt ++;
-         				if(lineCnt >= dataPartition.from && lineCnt < dataPartition.to)
-         				obj.data.push(line.toString());
-     				});
-}
-
-RddWorker.prototype.loadHDFS = function(dataPartition, cb) {
-	// TODO
-}
-
-
-RddWorker.prototype.applyLinearTrans = function(trans) {	
-	var obj = this;
-	var data = this.data;
-	trans.forEach(function(f){
+	// string. already loaded into memory
+	var data = [this.memManager.get(key)]; 
+	this.optimizeTransSeq(trans.trans).forEach(function(f){
 		data = obj.applyTrans(data, f);
 	});
-	return data;
+	
+	// compute key based on the first 1024 chars / elements
+	var key = this.memManager.md5Key(
+		{
+		 type : 'str', 
+		 content : data.slice(0, 1024),
+		 encoding : trans.source.encoding
+		});
+
+	this.memManager.put(key, data);
+
+	return key;
+}
+
+// TODO. optimize the transformations. ex. do filter first
+RddWorker.prototype.optimizeTransSeq = function(trans) {
+	return trans;
 }
 
 RddWorker.prototype.applyTrans = function(data, f) {
@@ -116,13 +148,23 @@ RddWorker.prototype.reduce = function(data, f, initialValue) {
 * actions. requested data should have already been loaded in memory.
 */
 RddWorker.prototype.count = function(partition) {
-	console.log(partition);
-	return this.data.length;
+	var key = partition.transKey;
+	var value = this.memManager.get(key);
+	var cnt = value.length;
+
+	// clear transformed key. since original key is stored in Rdd driver side, 
+	// there is no need to maintain the transformed key
+	this.memManager.remove(key);
+
+	return cnt;
 }
 
 RddWorker.prototype.collect = function(partition) {
-	console.log(partition);
-	return this.data;
+	var key = partition.transKey;
+	var value = this.memManager.get(key);
+
+	this.memManager.remove(key);
+	return value;
 }
 
 exports.RddWorker = RddWorker;
